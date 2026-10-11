@@ -1,0 +1,82 @@
+name: Build BHTikTok IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Прямая ссылка на РАСШИФРОВАННЫЙ TikTok IPA"
+        required: true
+        type: string
+      display_name:
+        description: "Название приложения (необязательно)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      # Передаём входные данные через env, а не напрямую в shell-скрипт
+      IPA_URL: ${{ inputs.ipa_url }}
+      DISPLAY_NAME: ${{ inputs.display_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore Theos and iOS SDK cache
+        uses: actions/cache@v4
+        with:
+          path: ~/theos
+          key: theos-sdk-iphoneos16.5-v1
+
+      - name: Install Theos and iOS SDK
+        run: |
+          if [ ! -d "$HOME/theos/makefiles" ]; then
+            git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          fi
+          if [ ! -d "$HOME/theos/sdks/iPhoneOS16.5.sdk" ]; then
+            git clone --filter=blob:none --sparse https://github.com/theos/sdks.git "$RUNNER_TEMP/sdks"
+            cd "$RUNNER_TEMP/sdks"
+            git sparse-checkout set iPhoneOS16.5.sdk
+            mkdir -p "$HOME/theos/sdks"
+            cp -R iPhoneOS16.5.sdk "$HOME/theos/sdks/"
+          fi
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        run: brew install ldid make dpkg
+
+      - name: Build tweak (.deb)
+        run: |
+          gmake package FINALPACKAGE=1
+          ls -la packages
+
+      - name: Download decrypted TikTok IPA
+        run: |
+          curl -fL --retry 3 -o TikTok.ipa "$IPA_URL"
+          ls -la TikTok.ipa
+
+      - name: Install cyan
+        run: |
+          python3 -m venv "$HOME/cyan-venv"
+          "$HOME/cyan-venv/bin/pip" install --force-reinstall https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+          echo "$HOME/cyan-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Inject tweak into IPA
+        run: |
+          NAME_ARGS=()
+          if [ -n "$DISPLAY_NAME" ]; then
+            NAME_ARGS=(-n "$DISPLAY_NAME")
+          fi
+          cyan -i TikTok.ipa -o BHTikTok.ipa "${NAME_ARGS[@]}" -uwf packages/*.deb
+          ls -la BHTikTok.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BHTikTok-ipa
+          path: BHTikTok.ipa
+          if-no-files-found: error

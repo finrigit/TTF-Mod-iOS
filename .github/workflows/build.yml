@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: "Прямая ссылка на РАСШИФРОВАННЫЙ TikTok IPA"
-        required: true
+        description: "Прямая ссылка на РАСШИФРОВАННЫЙ TikTok IPA (необязательно: если пусто, IPA берётся из черновика релиза tiktok-ipa)"
+        required: false
         type: string
+        default: ""
       display_name:
         description: "Название приложения (необязательно)"
         required: false
@@ -17,6 +18,9 @@ jobs:
   build:
     runs-on: macos-latest
     timeout-minutes: 90
+    # contents: write нужен, чтобы читать черновик релиза (draft) через API
+    permissions:
+      contents: write
     env:
       # Передаём входные данные через env, а не напрямую в shell-скрипт
       IPA_URL: ${{ inputs.ipa_url }}
@@ -55,8 +59,17 @@ jobs:
           ls -la packages
 
       - name: Download decrypted TikTok IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fL --retry 3 -o TikTok.ipa "$IPA_URL"
+          if [ -n "$IPA_URL" ]; then
+            curl -fL --retry 3 -o TikTok.ipa "$IPA_URL"
+          else
+            # Приватный IPA лежит в черновике релиза tiktok-ipa (не публикуется)
+            ASSET_URL=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq '[.[] | select(.draft) | .assets[] | select(.name | endswith(".ipa"))][0].url')
+            test -n "$ASSET_URL" || { echo "No IPA in draft release"; exit 1; }
+            curl -fL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" -o TikTok.ipa "$ASSET_URL"
+          fi
           ls -la TikTok.ipa
 
       - name: Install cyan
